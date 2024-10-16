@@ -23,34 +23,55 @@ output "bastion_host_public_ip" {
   description = "The public IP of the Bastion Host"
 }
 
-output "app_host_private_ip" {
-  value       = aws_instance.app.private_ip
-  description = "The private IP of the App Host"
-}
+# output "app_host_private_ip" {
+#   value       = aws_instance.app.private_ip
+#   description = "The private IP of the App Host"
+# }
 
 ### NETWORKING ###
 resource "aws_vpc" "this" {
-  cidr_block = "10.0.0.0/27"
+  cidr_block = "10.0.0.0/26"
 }
 
-resource "aws_subnet" "public" {
+resource "aws_subnet" "public_1" {
   vpc_id                  = aws_vpc.this.id
   cidr_block              = "10.0.0.0/28"
   availability_zone       = "us-west-1b"
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Public Subnet"
+    Name = "Public Subnet 1"
   }
 }
 
-resource "aws_subnet" "private" {
+resource "aws_subnet" "public_2" {
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = "10.0.0.16/28"
+  availability_zone       = "us-west-1c"
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "Public Subnet 2"
+  }
+}
+
+resource "aws_subnet" "private_1" {
   vpc_id            = aws_vpc.this.id
-  cidr_block        = "10.0.0.16/28"
+  cidr_block        = "10.0.0.32/28"
   availability_zone = "us-west-1b"
 
   tags = {
-    Name = "Private Subnet"
+    Name = "Private Subnet 1"
+  }
+}
+
+resource "aws_subnet" "private_2" {
+  vpc_id            = aws_vpc.this.id
+  cidr_block        = "10.0.0.48/28"
+  availability_zone = "us-west-1c"
+
+  tags = {
+    Name = "Private Subnet 2"
   }
 }
 
@@ -64,7 +85,7 @@ resource "aws_eip" "nat_gw" {
 
 resource "aws_nat_gateway" "public" {
   allocation_id = aws_eip.nat_gw.id
-  subnet_id     = aws_subnet.public.id
+  subnet_id     = aws_subnet.public_1.id
 }
 
 resource "aws_route_table" "public" {
@@ -80,8 +101,13 @@ resource "aws_route_table" "public" {
   }
 }
 
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
+resource "aws_route_table_association" "public_1" {
+  subnet_id      = aws_subnet.public_1.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "public_2" {
+  subnet_id      = aws_subnet.public_2.id
   route_table_id = aws_route_table.public.id
 }
 
@@ -98,8 +124,13 @@ resource "aws_route_table" "private" {
   }
 }
 
-resource "aws_route_table_association" "private" {
-  subnet_id      = aws_subnet.private.id
+resource "aws_route_table_association" "private_1" {
+  subnet_id      = aws_subnet.private_1.id
+  route_table_id = aws_route_table.private.id
+}
+
+resource "aws_route_table_association" "private_2" {
+  subnet_id      = aws_subnet.private_2.id
   route_table_id = aws_route_table.private.id
 }
 
@@ -107,7 +138,7 @@ resource "aws_route_table_association" "private" {
 resource "aws_instance" "bastion" {
   ami                    = "ami-0d53d72369335a9d6"
   instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.public.id
+  subnet_id              = aws_subnet.public_1.id
   key_name               = var.key_name
   vpc_security_group_ids = [aws_security_group.bastion.id]
 
@@ -116,18 +147,18 @@ resource "aws_instance" "bastion" {
   }
 }
 
-resource "aws_instance" "app" {
-  ami                    = "ami-0d53d72369335a9d6"
-  instance_type          = "t2.micro"
-  subnet_id              = aws_subnet.private.id
-  key_name               = var.key_name
-  vpc_security_group_ids = [aws_security_group.app.id]
-  iam_instance_profile   = aws_iam_instance_profile.s3_file_uploader.name
+# resource "aws_instance" "app" {
+#   ami                    = "ami-0d53d72369335a9d6"
+#   instance_type          = "t2.micro"
+#   subnet_id              = aws_subnet.private.id
+#   key_name               = var.key_name
+#   vpc_security_group_ids = [aws_security_group.app.id]
+#   iam_instance_profile   = aws_iam_instance_profile.s3_file_uploader.name
 
-  tags = {
-    Name = "S3 File Uploader Host"
-  }
-}
+#   tags = {
+#     Name = "S3 File Uploader Host"
+#   }
+# }
 
 resource "aws_security_group" "bastion" {
   name        = "bastion_host"
@@ -161,11 +192,142 @@ resource "aws_security_group" "app" {
     cidr_blocks = ["10.0.0.0/28"]
   }
 
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/28"]
+  }
+
+
+  ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["10.0.0.0/28"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_launch_template" "s3_file_uploader" {
+  description = "Initial template for S3 file uploader instances"
+  iam_instance_profile {
+    arn = aws_iam_instance_profile.s3_file_uploader.arn
+  }
+  image_id               = "ami-0d53d72369335a9d6"
+  instance_type          = "t2.micro"
+  key_name               = var.key_name
+  name                   = "s3-file-uploader-lt"
+  vpc_security_group_ids = [aws_security_group.app.id]
+  update_default_version = true
+  user_data              = base64encode(file("./scripts/setup.sh"))
+
+  tags = {
+    Name = "S3 File Uploader Launch Template"
+  }
+}
+
+resource "aws_lb" "this" {
+  name               = "tf-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = [aws_subnet.public_1.id, aws_subnet.public_2.id]
+}
+
+resource "aws_lb_target_group" "front_end" {
+  name        = "s3-file-uploader-front-end-tg"
+  port        = 80
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.this.id
+}
+
+resource "aws_lb_listener" "front_end" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.front_end.arn
+  }
+}
+
+resource "aws_lb_target_group" "back_end" {
+  name        = "s3-file-uploader-back-end-tg"
+  port        = 5000
+  protocol    = "HTTP"
+  target_type = "instance"
+  vpc_id      = aws_vpc.this.id
+
+  health_check {
+    interval = 5
+    timeout = 2
+    path = "/health"
+  }
+}
+
+resource "aws_lb_listener" "backend_end" {
+  load_balancer_arn = aws_lb.this.arn
+  port              = 5000
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.back_end.arn
+  }
+}
+
+resource "aws_security_group" "alb" {
+  name        = "alb"
+  description = "ALB Security Group"
+  vpc_id      = aws_vpc.this.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip]
+  }
+
+  ingress {
+    from_port   = 5000
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = [var.my_ip]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_autoscaling_group" "this" {
+  name                = "s3-file-uploader-asg"
+  max_size            = 1
+  min_size            = 1
+  desired_capacity    = 1
+  health_check_type   = "EC2"
+  vpc_zone_identifier = [aws_subnet.private_1.id, aws_subnet.private_2.id]
+  target_group_arns   = [aws_lb_target_group.front_end.arn, aws_lb_target_group.back_end.arn]
+  launch_template {
+    id = aws_launch_template.s3_file_uploader.id
+  }
+
+  tag {
+    key = "Name"
+    value = "ASG App Node"
+    propagate_at_launch = true
   }
 }
 
